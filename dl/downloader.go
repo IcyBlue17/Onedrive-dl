@@ -3,11 +3,12 @@ package dl
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
+	"github.com/melbahja/got"
 	"github.com/vbauerster/mpb/v8"
 	"github.com/vbauerster/mpb/v8/decor"
 	"golang.org/x/sync/errgroup"
@@ -16,10 +17,11 @@ import (
 )
 
 type DL struct {
-	OutDir string
-	Jobs   int
-	Debug  bool
-	Client *http.Client
+	OutDir      string
+	Jobs        int
+	ConnPerFile int
+	Debug       bool
+	Client      *http.Client
 }
 
 type Result struct {
@@ -28,25 +30,29 @@ type Result struct {
 	Err     error
 }
 
-func New(outDir string, jobs int, debug bool, client *http.Client) *DL {
+func New(outDir string, jobs, connPerFile int, debug bool, client *http.Client) *DL {
+	if connPerFile < 1 {
+		connPerFile = 1
+	}
 	return &DL{
-		OutDir: outDir,
-		Jobs:   jobs,
-		Debug:  debug,
-		Client: client,
+		OutDir:      outDir,
+		Jobs:        jobs,
+		ConnPerFile: connPerFile,
+		Debug:       debug,
+		Client:      client,
 	}
 }
 
 func (d *DL) Start(info *od.ShareInfo) []Result {
 	results := make([]Result, len(info.Files))
 
-	fmt.Printf("\nDownloading %d files (%s) with %d concurrent connections\n",
-		info.TotalFiles, fmtSize(info.TotalSize), d.Jobs)
-	fmt.Printf("Output directory: %s\n\n", d.OutDir)
+	fmt.Printf("\nDownloading %d files (%s), %d parallel, %d conn/file\n",
+		info.TotalFiles, fmtSize(info.TotalSize), d.Jobs, d.ConnPerFile)
+	fmt.Printf("Output: %s\n\n", d.OutDir)
 
 	if err := os.MkdirAll(d.OutDir, 0755); err != nil {
 		for i := range results {
-			results[i] = Result{File: info.Files[i], Err: fmt.Errorf("failed to create output dir: %w", err)}
+			results[i] = Result{File: info.Files[i], Err: fmt.Errorf("mkdir: %w", err)}
 		}
 		return results
 	}
@@ -75,55 +81,15 @@ func (d *DL) dlFile(file od.FileEntry, p *mpb.Progress) Result {
 
 	dir := filepath.Dir(localPath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return Result{File: file, Err: fmt.Errorf("mkdir failed: %w", err)}
+		return Result{File: file, Err: fmt.Errorf("mkdir: %w", err)}
 	}
 
-	if stat, err := os.Stat(localPath); err == nil {
-		if stat.Size() == file.Size {
-			return Result{File: file, Skipped: true}
-		}
+	if stat, err := os.Stat(localPath); err == nil && stat.Size() == file.Size {
+		return Result{File: file, Skipped: true}
 	}
 
 	if file.DlURL == "" {
 		return Result{File: file, Err: fmt.Errorf("no download URL")}
-	}
-
-	tmpPath := localPath + ".downloading"
-	var offset int64
-	if stat, err := os.Stat(tmpPath); err == nil {
-		offset = stat.Size()
-	}
-
-	req, err := http.NewRequest("GET", file.DlURL, nil)
-	if err != nil {
-		return Result{File: file, Err: err}
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
-
-	if offset > 0 {
-		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
-	}
-
-	resp, err := d.Client.Do(req)
-	if err != nil {
-		return Result{File: file, Err: fmt.Errorf("request failed: %w", err)}
-	}
-	defer resp.Body.Close()
-
-	var outFile *os.File
-	if resp.StatusCode == http.StatusPartialContent && offset > 0 {
-		outFile, err = os.OpenFile(tmpPath, os.O_WRONLY|os.O_APPEND, 0644)
-		if err != nil {
-			return Result{File: file, Err: err}
-		}
-	} else if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusPartialContent {
-		offset = 0
-		outFile, err = os.Create(tmpPath)
-		if err != nil {
-			return Result{File: file, Err: err}
-		}
-	} else {
-		return Result{File: file, Err: fmt.Errorf("HTTP %d", resp.StatusCode)}
 	}
 
 	name := file.Name
@@ -141,24 +107,44 @@ func (d *DL) dlFile(file od.FileEntry, p *mpb.Progress) Result {
 			decor.EwmaSpeed(decor.SizeB1024(0), "% .2f", 60),
 		),
 	)
-	if offset > 0 {
-		bar.SetCurrent(offset)
+
+	dl := got.NewDownload(context.Background(), file.DlURL, localPath)
+	dl.Client = d.Client
+	dl.Concurrency = uint(d.ConnPerFile)
+
+	if err := dl.Init(); err != nil {
+		bar.Abort(true)
+		return Result{File: file, Err: fmt.Errorf("init: %w", err)}
 	}
 
-	reader := bar.ProxyReader(resp.Body)
-	defer reader.Close()
+	done := make(chan struct{})
+	go func() {
+		var last int64
+		ticker := time.NewTicker(150 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				cur := int64(dl.Size())
+				if delta := cur - last; delta > 0 {
+					bar.IncrBy(int(delta))
+					last = cur
+				}
+			}
+		}
+	}()
 
-	_, copyErr := io.Copy(outFile, reader)
-	outFile.Close()
+	err := dl.Start()
+	close(done)
 
-	if copyErr != nil {
-		return Result{File: file, Err: fmt.Errorf("download failed: %w", copyErr)}
+	if err != nil {
+		bar.Abort(true)
+		return Result{File: file, Err: fmt.Errorf("download: %w", err)}
 	}
 
-	if err := os.Rename(tmpPath, localPath); err != nil {
-		return Result{File: file, Err: fmt.Errorf("rename failed: %w", err)}
-	}
-
+	bar.SetCurrent(file.Size)
 	return Result{File: file}
 }
 

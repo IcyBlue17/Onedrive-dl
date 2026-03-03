@@ -4,6 +4,7 @@ go 1.25.6
 
 require (
 	github.com/go-resty/resty/v2 v2.16.5
+	github.com/melbahja/got v0.7.0
 	github.com/spf13/pflag v1.0.6
 	github.com/vbauerster/mpb/v8 v8.9.1
 	golang.org/x/sync v0.11.0

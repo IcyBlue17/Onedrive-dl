@@ -4,15 +4,16 @@ import (
 	"fmt"
 	"os"
 
+	flag "github.com/spf13/pflag"
 	"onedrive-dl/dl"
 	"onedrive-dl/od"
-	flag "github.com/spf13/pflag"
 )
 
 func main() {
 	outDir := flag.StringP("output", "o", ".", "Download output directory")
 	pwd := flag.StringP("password", "p", "", "Share password (if protected)")
-	jobs := flag.IntP("jobs", "j", 3, "Concurrent downloads")
+	jobs := flag.IntP("jobs", "j", 3, "Concurrent file downloads")
+	conns := flag.IntP("conn", "c", 8, "Connections per file")
 	listMode := flag.BoolP("list", "l", false, "List files only, do not download")
 	verbose := flag.Bool("verbose", false, "Verbose logging")
 
@@ -31,13 +32,13 @@ func main() {
 
 	shareURL := flag.Arg(0)
 
-	if err := run(shareURL, *outDir, *pwd, *jobs, *listMode, *verbose); err != nil {
+	if err := run(shareURL, *outDir, *pwd, *jobs, *conns, *listMode, *verbose); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(shareURL, outDir, pwd string, jobs int, listMode, verbose bool) error {
+func run(shareURL, outDir, pwd string, jobs, conns int, listMode, verbose bool) error {
 	client := od.NewClient(verbose)
 
 	fmt.Println("Resolving share link...")
@@ -91,7 +92,7 @@ func run(shareURL, outDir, pwd string, jobs int, listMode, verbose bool) error {
 		return nil
 	}
 
-	d := dl.New(outDir, jobs, verbose, client.HTTP.GetClient())
+	d := dl.New(outDir, jobs, conns, verbose, client.HTTP.GetClient())
 	results := d.Start(info)
 	dl.Summary(results)
 

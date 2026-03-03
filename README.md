@@ -6,6 +6,8 @@
 
 - 支持SharePoint/OneDrive Business/Personal分享链接
 - 支持带密码的分享
+- 单文件多连接分块并发下载
+- 多文件并行下载
 - 断点续传
 - 递归下载子文件夹
 
@@ -30,7 +32,8 @@ onedrive-dl [选项] <分享链接>
 选项：
   -o, --output <目录>     下载目录（默认当前目录）
   -p, --password <密码>   分享密码
-  -j, --jobs <N>          并发数（默认为3）
+  -j, --jobs <N>          并行下载文件数（默认为3）
+  -c, --conn <N>          每个文件的连接数（默认为8）
   -l, --list              仅列出文件
   --verbose               详细日志
 ```
@@ -39,8 +42,8 @@ onedrive-dl [选项] <分享链接>
 # 列出文件
 onedrive-dl -l "https://xxx.sharepoint.com/:f:/g/personal/..."
 
-# 下载到指定目录
-onedrive-dl -o ./out -j 5 "https://xxx.sharepoint.com/:f:/g/personal/..."
+# 下载到指定目录，5文件并行，每文件16连接
+onedrive-dl -o ./out -j 5 -c 16 "https://xxx.sharepoint.com/:f:/g/personal/..."
 
 # 带密码
 onedrive-dl -o ./out -p 密码 "https://xxx.sharepoint.com/:f:/g/personal/..."
@@ -67,7 +70,7 @@ case od.TypePersonal:
     info, _ = (&od.PersonalHandler{Client: client}).ListFiles(finalURL, body)
 }
 
-d := dl.New("./output", 3, false, client.HTTP.GetClient())
+d := dl.New("./output", 3, 8, false, client.HTTP.GetClient())
 d.Start(info)
 ```
 
