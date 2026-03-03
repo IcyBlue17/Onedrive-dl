@@ -111,6 +111,9 @@ func (d *DL) dlFile(file od.FileEntry, p *mpb.Progress) Result {
 	dl := got.NewDownload(context.Background(), file.DlURL, localPath)
 	dl.Client = d.Client
 	dl.Concurrency = uint(d.ConnPerFile)
+	dl.Header = []got.GotHeader{
+		{Key: "User-Agent", Value: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1"},
+	}
 
 	if err := dl.Init(); err != nil {
 		bar.Abort(true)
