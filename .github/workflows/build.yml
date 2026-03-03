@@ -70,10 +70,24 @@ jobs:
           if [ "$GOOS" = "windows" ]; then EXT=".exe"; fi
           go build -ldflags="-s -w" -o onedrive-dl-${GOOS}-${GOARCH}${EXT} .
 
-      - name: Upload to Release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: onedrive-dl-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: onedrive-dl-*
+
+  release:
+    needs: [tag, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.tag.outputs.new_tag }}
           name: ${{ needs.tag.outputs.new_tag }}
           body: ${{ needs.tag.outputs.changelog }}
-          files: onedrive-dl-*
+          files: artifacts/*
