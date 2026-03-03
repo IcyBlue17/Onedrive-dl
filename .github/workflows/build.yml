@@ -3,6 +3,12 @@ name: Release
 on:
   push:
     branches: [main]
+    paths:
+      - "*.go"
+      - "od/**"
+      - "dl/**"
+      - "go.mod"
+      - "go.sum"
   workflow_dispatch:
 
 permissions:

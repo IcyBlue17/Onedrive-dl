@@ -15,10 +15,11 @@
 go install github.com/IcyBleu17/onedrive-dl@latest
 ```
 
-或从源码编译：
+或直接从二进制运行：
 
 ```bash
-go build -o onedrive-dl .
+# 下载最新的对应架构的release
+./onedrive-dl
 ```
 
 ## 用法
